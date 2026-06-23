@@ -4,12 +4,16 @@
 //
 //   - a fixed number of worker goroutines process submitted tasks;
 //   - tasks wait in a bounded queue when all workers are busy;
-//   - submissions are rejected (ErrQueueFull) once the queue is full.
+//   - submissions are rejected once the budget is exhausted.
 //
-// Unlike the gozero (adaptive, CPU + Little's Law) and quarkus (Vegas +
-// priority) packages, this one sheds purely on a fixed concurrency budget: workers +
-// queue. There is no adaptivity — capacity is exactly Workers + QueueCapacity
-// in-flight tasks.
+// It supports two of the four queue shedding policies directly:
+//
+//   - policy 1, length: reject immediately when full (MaxWait == 0, ErrQueueFull);
+//   - policy 2, enqueue-wait timeout: block up to MaxWait for a slot, then
+//     reject (ErrQueueTimeout).
+//
+// Policies 3 and 4 (CoDel sojourn-time dropping and adaptive LIFO) are provided
+// by CodelPool in codel.go.
 package queue
 
 import (
@@ -17,17 +21,24 @@ import (
 	"net/http"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/zeromicro/go-zero/core/threading"
 )
 
 var (
 	// ErrQueueFull is returned by Submit when the bounded queue is full.
-	ErrQueueFull = errors.New("queueshedding: queue full, request rejected")
+	ErrQueueFull = errors.New("queue: queue full, request rejected")
+	// ErrQueueTimeout is returned by Submit when MaxWait elapses before a slot
+	// becomes available (policy 2 — enqueue-wait timeout).
+	ErrQueueTimeout = errors.New("queue: timed out waiting for a slot")
+	// ErrOverloaded is returned by Submit when the CPU gate rejects the request
+	// before it reaches the queue (CpuThreshold exceeded).
+	ErrOverloaded = errors.New("queue: cpu overloaded")
 	// ErrStopped is returned by Submit after the pool has been stopped.
-	ErrStopped = errors.New("queueshedding: pool stopped")
+	ErrStopped = errors.New("queue: pool stopped")
 	// errNilTask is returned by Submit when given a nil task.
-	errNilTask = errors.New("queueshedding: nil task")
+	errNilTask = errors.New("queue: nil task")
 )
 
 // Config configures the bounded worker pool.
@@ -39,6 +50,19 @@ type Config struct {
 	// full and all workers are busy, submissions are rejected. A value of 0
 	// means no queue: a task is rejected unless a worker is immediately ready.
 	QueueCapacity int
+	// MaxWait, when > 0, makes Submit block up to this duration for a free slot
+	// before rejecting with ErrQueueTimeout (policy 2 — enqueue-wait timeout,
+	// like Resilience4j ThreadPoolBulkhead.maxWaitDuration). When 0 (default),
+	// Submit never blocks and rejects immediately with ErrQueueFull (policy 1).
+	MaxWait time.Duration
+	// CpuThreshold, when > 0 and Gate is nil, installs a static CPU gate: a
+	// request is rejected with ErrOverloaded (before reserving a slot) when CPU
+	// usage (millicpu, 0-1000) is at or above this value.
+	CpuThreshold int64
+	// Gate, when set, is the admission gate placed in front of the queue
+	// (overrides CpuThreshold). Use NewCPUThresholdGate, NewGozeroGate, or a
+	// custom Gate. The gate can be toggled on/off at runtime via SetGateEnabled.
+	Gate Gate
 }
 
 // Stats is a point-in-time snapshot of pool activity.
@@ -59,6 +83,8 @@ type Stats struct {
 type Pool struct {
 	tasks    chan func()
 	sem      chan struct{}
+	maxWait  time.Duration
+	gate     Gate
 	wg       sync.WaitGroup
 	mu       sync.RWMutex
 	closed   bool
@@ -80,8 +106,10 @@ func New(cfg Config) *Pool {
 
 	capacity := cfg.Workers + cfg.QueueCapacity
 	p := &Pool{
-		tasks: make(chan func(), capacity),
-		sem:   make(chan struct{}, capacity),
+		tasks:   make(chan func(), capacity),
+		sem:     make(chan struct{}, capacity),
+		maxWait: cfg.MaxWait,
+		gate:    gateFor(cfg.Gate, cfg.CpuThreshold),
 	}
 	p.wg.Add(cfg.Workers)
 	for i := 0; i < cfg.Workers; i++ {
@@ -105,29 +133,82 @@ func (p *Pool) run(task func()) {
 	threading.RunSafe(task)
 }
 
-// Submit enqueues task for execution, returning ErrQueueFull if the queue is
-// full or ErrStopped if the pool has been stopped. It never blocks.
+// Submit enqueues task for execution. With MaxWait == 0 it never blocks and
+// returns ErrQueueFull when the budget is exhausted (policy 1). With MaxWait > 0
+// it blocks up to MaxWait for a slot, returning ErrQueueTimeout on expiry
+// (policy 2). It returns ErrStopped if the pool has been stopped.
 func (p *Pool) Submit(task func()) error {
 	if task == nil {
 		return errNilTask
 	}
 
+	// Admission gate (e.g. CPU): reject early before reserving a slot.
+	done, ok := p.gateAllow()
+	if !ok {
+		p.rejected.Add(1)
+		return ErrOverloaded
+	}
+
+	if !p.acquire() {
+		done(false) // release the gate (e.g. go-zero promise) — request shed
+		p.rejected.Add(1)
+		if p.maxWait > 0 {
+			return ErrQueueTimeout
+		}
+		return ErrQueueFull
+	}
+
+	// Slot acquired (not under lock, so a blocking wait never stalls Stop).
+	// Briefly lock to send safely against a concurrent Stop closing the channel.
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	if p.closed {
+		<-p.sem // release the slot we took
+		done(false)
 		return ErrStopped
 	}
+	// cap(tasks) == cap(sem) and we hold a token ⇒ this send never blocks.
+	p.tasks <- func() { defer done(true); task() }
+	p.accepted.Add(1)
+	return nil
+}
 
+func (p *Pool) gateAllow() (func(bool), bool) {
+	if p.gate == nil {
+		return noopDone, true
+	}
+	return p.gate.Allow()
+}
+
+// Gate returns the admission gate, or nil if none is configured.
+func (p *Pool) Gate() Gate { return p.gate }
+
+// SetGateEnabled toggles the admission gate on/off at runtime. No-op if there is
+// no gate.
+func (p *Pool) SetGateEnabled(on bool) {
+	if p.gate != nil {
+		p.gate.SetEnabled(on)
+	}
+}
+
+// acquire takes an in-flight slot, waiting up to maxWait when set.
+func (p *Pool) acquire() bool {
+	if p.maxWait <= 0 {
+		select {
+		case p.sem <- struct{}{}:
+			return true
+		default:
+			return false
+		}
+	}
+
+	timer := time.NewTimer(p.maxWait)
+	defer timer.Stop()
 	select {
 	case p.sem <- struct{}{}:
-		// Token acquired: capacity(tasks) == capacity(sem) guarantees this send
-		// never blocks, so it is safe to do under the read lock.
-		p.tasks <- task
-		p.accepted.Add(1)
-		return nil
-	default:
-		p.rejected.Add(1)
-		return ErrQueueFull
+		return true
+	case <-timer.C:
+		return false
 	}
 }
 

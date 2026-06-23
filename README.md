@@ -30,7 +30,7 @@ go get github.com/minhnhathoang/load-shedding/sentinel
 
 ### gozero — adaptive (CPU + Little's Law)
 
-```go
+```
 import (
     "github.com/minhnhathoang/load-shedding/gozero"
     "github.com/zeromicro/go-zero/core/load"
@@ -42,7 +42,7 @@ mux.Handle("/", s.Handler(next))
 
 ### quarkus — Vegas concurrency limiter + priority shedding
 
-```go
+```
 import "github.com/minhnhathoang/load-shedding/quarkus"
 
 s := quarkus.New(quarkus.DefaultConfig(),
@@ -54,7 +54,7 @@ mux.Handle("/", s.Handler(next))
 
 ### queue — fixed pool + bounded queue (reject when full)
 
-```go
+```
 import "github.com/minhnhathoang/load-shedding/queue"
 
 p := queue.New(queue.Config{Workers: 8, QueueCapacity: 64})
@@ -64,7 +64,7 @@ mux.Handle("/", p.Handler(next)) // 503 when the queue is full
 
 ### sentinel — BBR system adaptive protection
 
-```go
+```
 import "github.com/minhnhathoang/load-shedding/sentinel"
 
 s, err := sentinel.New(sentinel.Config{CpuThreshold: 0.8})

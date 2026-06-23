@@ -16,6 +16,52 @@ func init() {
 	logx.Disable()
 }
 
+func TestMaxWaitTimesOut(t *testing.T) {
+	// 1 worker, no queue, short MaxWait: occupy the worker, then a second submit
+	// should block ~MaxWait and return ErrQueueTimeout.
+	p := New(Config{Workers: 1, QueueCapacity: 0, MaxWait: 50 * time.Millisecond})
+	defer p.Stop()
+
+	block := make(chan struct{})
+	started := make(chan struct{})
+	assert.NoError(t, p.Submit(func() {
+		close(started)
+		<-block
+	}))
+	<-started
+
+	start := time.Now()
+	err := p.Submit(func() {})
+	elapsed := time.Since(start)
+
+	assert.ErrorIs(t, err, ErrQueueTimeout)
+	assert.GreaterOrEqual(t, elapsed, 40*time.Millisecond) // waited ~MaxWait
+	close(block)
+}
+
+func TestMaxWaitSucceedsWhenSlotFreesUp(t *testing.T) {
+	p := New(Config{Workers: 1, QueueCapacity: 0, MaxWait: 500 * time.Millisecond})
+	defer p.Stop()
+
+	release := make(chan struct{})
+	started := make(chan struct{})
+	assert.NoError(t, p.Submit(func() {
+		close(started)
+		<-release
+	}))
+	<-started
+
+	// Free the worker shortly; the waiting submit should then succeed.
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		close(release)
+	}()
+
+	var ran atomic.Bool
+	assert.NoError(t, p.SubmitWait(func() { ran.Store(true) }))
+	assert.True(t, ran.Load())
+}
+
 func TestSubmitNil(t *testing.T) {
 	p := New(Config{Workers: 1, QueueCapacity: 1})
 	defer p.Stop()

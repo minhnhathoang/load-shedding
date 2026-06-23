@@ -7,8 +7,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/zeromicro/go-zero/core/threading"
 )
 
 // Default CoDel parameters (the values from the CoDel paper / folly).
@@ -293,7 +291,7 @@ func (p *CodelPool) shouldDrop(enq, now time.Time) bool {
 func (p *CodelPool) run(task func()) {
 	p.active.Add(1)
 	defer p.active.Add(-1)
-	threading.RunSafe(task)
+	runSafe(task)
 }
 
 // Stats returns a snapshot of current activity.

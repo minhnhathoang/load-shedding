@@ -22,8 +22,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/zeromicro/go-zero/core/threading"
 )
 
 var (
@@ -129,8 +127,8 @@ func (p *Pool) worker() {
 func (p *Pool) run(task func()) {
 	p.active.Add(1)
 	defer p.active.Add(-1)
-	// RunSafe recovers and logs panics so a faulty task can't kill the worker.
-	threading.RunSafe(task)
+	// runSafe recovers and logs panics so a faulty task can't kill the worker.
+	runSafe(task)
 }
 
 // Submit enqueues task for execution. With MaxWait == 0 it never blocks and

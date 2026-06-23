@@ -1,10 +1,6 @@
 package queue
 
-import (
-	"sync/atomic"
-
-	"github.com/zeromicro/go-zero/core/load"
-)
+import "sync/atomic"
 
 // Gate is an admission gate placed in front of the queue. Allow reports whether
 // a request may enter; when ok is true the caller must call done(success)
@@ -63,48 +59,10 @@ func (g *CPUThresholdGate) SetEnabled(on bool) { g.enabled.Store(on) }
 // Enabled reports whether the gate is currently active.
 func (g *CPUThresholdGate) Enabled() bool { return g.enabled.Load() }
 
-// GozeroGate uses go-zero's adaptive shedder (CPU usage + Little's Law + cool-off
-// hysteresis) as the admission gate. Unlike the static threshold gate, it learns
-// the service's capacity from live throughput and latency, and only sheds when
-// CPU is saturated AND in-flight concurrency exceeds the learned limit.
-type GozeroGate struct {
-	shedder load.Shedder
-	enabled atomic.Bool
-}
-
-// NewGozeroGate returns an enabled gate backed by go-zero's adaptive shedder.
-// opts are forwarded to load.NewAdaptiveShedder (e.g. load.WithCpuThreshold).
-func NewGozeroGate(opts ...load.ShedderOption) *GozeroGate {
-	g := &GozeroGate{shedder: load.NewAdaptiveShedder(opts...)}
-	g.enabled.Store(true)
-	return g
-}
-
-// Allow implements Gate. On admission it returns a done that reports the outcome
-// back to the adaptive shedder (Pass on success, Fail otherwise) so the model
-// keeps learning.
-func (g *GozeroGate) Allow() (func(bool), bool) {
-	if !g.enabled.Load() {
-		return noopDone, true
-	}
-	p, err := g.shedder.Allow()
-	if err != nil {
-		return nil, false
-	}
-	return func(success bool) {
-		if success {
-			p.Pass()
-		} else {
-			p.Fail()
-		}
-	}, true
-}
-
-// SetEnabled toggles the gate at runtime.
-func (g *GozeroGate) SetEnabled(on bool) { g.enabled.Store(on) }
-
-// Enabled reports whether the gate is currently active.
-func (g *GozeroGate) Enabled() bool { return g.enabled.Load() }
+// For an adaptive CPU + Little's-Law gate backed by go-zero's shedder, use
+// gozero.NewGate from the github.com/minhnhathoang/load-shedding/gozero package;
+// it returns a value that satisfies this package's Gate interface while keeping
+// queue itself free of any go-zero dependency.
 
 // gateFor builds the gate for a pool: an explicit Gate wins; otherwise a static
 // CPU-threshold gate is installed when cpuThreshold > 0; otherwise nil (no gate).

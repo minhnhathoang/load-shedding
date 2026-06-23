@@ -1,6 +1,8 @@
 package queue
 
 import (
+	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -9,11 +11,11 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/zeromicro/go-zero/core/logx"
 )
 
 func init() {
-	logx.Disable()
+	// silence runSafe's panic logs during the panic-recovery test
+	log.SetOutput(io.Discard)
 }
 
 func TestMaxWaitTimesOut(t *testing.T) {

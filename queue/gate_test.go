@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/zeromicro/go-zero/core/load"
 )
 
 func TestCPUThresholdGateAllow(t *testing.T) {
@@ -40,23 +39,6 @@ func TestCPUThresholdGateDisabledAdmits(t *testing.T) {
 	assert.False(t, g.Enabled())
 	_, ok := g.Allow()
 	assert.True(t, ok, "a disabled gate admits everything")
-}
-
-func TestGozeroGateAllowAndToggle(t *testing.T) {
-	g := NewGozeroGate(load.WithCpuThreshold(900))
-	done, ok := g.Allow()
-	assert.True(t, ok)
-	assert.NotNil(t, done)
-	assert.NotPanics(t, func() { done(true) })
-
-	done, ok = g.Allow()
-	assert.True(t, ok)
-	assert.NotPanics(t, func() { done(false) })
-
-	g.SetEnabled(false)
-	d, ok := g.Allow()
-	assert.True(t, ok)
-	assert.NotNil(t, d)
 }
 
 // recordingGate records admissions and how each one is resolved, to prove the

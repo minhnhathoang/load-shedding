@@ -482,13 +482,17 @@ slot or enters the queue**; otherwise it is enqueued as usual:
 
 Two gate implementations are provided (or supply your own `Gate`):
 
-- **`NewCPUThresholdGate(threshold)`** — static: reject when CPU usage (millicpu,
-  0-1000, from go-zero's cgroup-aware `stat.CpuUsage`) ≥ threshold. Shorthand:
-  set `Config.CpuThreshold` and a static gate is installed automatically.
-- **`NewGozeroGate(load.WithCpuThreshold(...))`** — uses go-zero's **adaptive
+- **`queue.NewCPUThresholdGate(threshold)`** — static: reject when CPU usage
+  (millicpu, 0-1000, from the queue package's own self-contained cgroup-aware
+  CPU sampler) ≥ threshold. Shorthand: set `Config.CpuThreshold` and a static
+  gate is installed automatically. The `queue` package has **no go-zero
+  dependency**.
+- **`gozero.NewGate(load.WithCpuThreshold(...))`** — uses go-zero's **adaptive
   shedder** (CPU + Little's Law + cool-off hysteresis); it learns capacity from
   live traffic and only sheds when CPU is saturated *and* concurrency exceeds the
-  learned limit. The gate feeds Pass/Fail back to the shedder on completion.
+  learned limit. The gate feeds Pass/Fail back to the shedder on completion. It
+  lives in the `gozero` package (which depends on go-zero) but satisfies
+  `queue.Gate`, so passing it as `queue.Config.Gate` keeps queue go-zero-free.
 
 The gate is **toggleable at runtime** — `pool.SetGateEnabled(false)` (or
 `pool.Gate().SetEnabled(false)`) turns it off; a disabled gate admits everything.

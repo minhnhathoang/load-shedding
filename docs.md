@@ -324,6 +324,29 @@ newLimit = clamp(newLimit, minLimit, maxLimit)
 
 The `quarkus` package ports the **Vegas** variant (simplified — see above).
 
+### Does it queue?
+
+The **core limiters fail fast** — over the limit, `acquire()` returns empty and the
+request is rejected. But the library ships two blocking (queueing) wrappers:
+
+- **`BlockingLimiter`** — blocks the caller until a permit frees up or a timeout
+  deadline passes.
+- **`LifoBlockingLimiter`** — a **bounded LIFO backlog queue**: `maxBacklogSize`
+  (default 100) + per-request `backlogTimeout`, serving the newest waiter first.
+
+This maps almost 1:1 onto the `queue` package's policies (bounded length +
+enqueue-timeout + adaptive LIFO) — Netflix just puts the queue *outside* the
+limiter. Note the `quarkus` package ports only the Vegas *limit* (fail-fast) and
+**not** these queue wrappers.
+
+### Go port (this repo)
+
+The [`concurrencylimits`](./concurrencylimits) package is a faithful Go port of
+the **full** Netflix library — `VegasLimit`, `GradientLimit`, `Gradient2Limit`,
+`FixedLimit`, the `SimpleLimiter` (fail-fast) **and** the `LifoBlockingLimiter`
+(the bounded LIFO queue). Pure stdlib, no go-zero. This is the distinction from
+`quarkus`, which ports only Quarkus's simplified Vegas limit with no queue.
+
 ## quarkus
 
 > The Quarkus load-shedding extension separates *whether* to shed from *what* to shed. A Vegas **OverloadDetector** (from concurrency-limits) answers the first; a **priority + cohort** scorer answers the second, shedding the least important traffic first and progressively more as CPU climbs.

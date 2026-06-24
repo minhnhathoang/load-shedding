@@ -8,7 +8,8 @@ plus an `http.Handler` middleware).
 |---------|----------|--------|----------------------|
 | [`gozero`](./gozero) | Adaptive (Little's Law) | CPU + in-flight concurrency | go-zero |
 | [`quarkus`](./quarkus) | TCP Vegas + priority/cohort (Quarkus port) | RTT gradient + CPU | go-zero (CPU only) |
-| [`queue`](./queue) | Fixed worker pool + bounded queue (Java threadpool) | concurrency only | go-zero (threading) |
+| [`concurrencylimits`](./concurrencylimits) | Vegas / Gradient / Gradient2 + LIFO queue (Netflix port) | RTT gradient | none (stdlib) |
+| [`queue`](./queue) | Fixed worker pool + bounded queue (Java threadpool) | concurrency (+ optional CPU gate) | none (stdlib) |
 | [`sentinel`](./sentinel) | Sentinel BBR system adaptive protection | CPU / load / RT / concurrency / QPS | **separate module** (sentinel-golang) |
 
 ## Install
@@ -52,6 +53,20 @@ s := quarkus.New(quarkus.DefaultConfig(),
 mux.Handle("/", s.Handler(next))
 ```
 
+### concurrencylimits — Netflix adaptive concurrency limits
+
+```
+import "github.com/minhnhathoang/load-shedding/concurrencylimits"
+
+// fail-fast: reject when in-flight exceeds the adaptive limit
+s := concurrencylimits.NewSimpleLimiter(concurrencylimits.NewGradient2Limit())
+mux.Handle("/", s.Handler(next))
+
+// or wrap it in a bounded LIFO backlog queue (wait instead of reject)
+q := concurrencylimits.NewLifoBlockingLimiter(s, 100, 200*time.Millisecond)
+mux.Handle("/", q.Handler(next))
+```
+
 ### queue — fixed pool + bounded queue (reject when full)
 
 ```
@@ -76,12 +91,14 @@ mux.Handle("/", s.Handler(next))
 
 - **gozero** — general-purpose adaptive shedding tied to the CPU limit; self-calibrating, zero tuning.
 - **quarkus** — when you want graded, priority-aware shedding (shed low-priority/high-cohort traffic first) driven by latency gradients.
+- **concurrencylimits** — pure latency-driven adaptive concurrency (no CPU signal needed), with a choice of fail-fast or LIFO-queue admission; zero external deps.
 - **queue** — when capacity is a hard, known concurrency budget and you want deterministic reject-when-full behavior.
 - **sentinel** — when you're already in the Sentinel ecosystem or want multi-metric (load/RT/QPS) BBR protection.
 
 ## Attribution
 
 - `gozero` wraps [go-zero](https://github.com/zeromicro/go-zero) `core/load`.
-- `quarkus` is a Go port of the [Quarkus load-shedding extension](https://github.com/quarkusio/quarkus/tree/main/extensions/load-shedding) (itself based on [Netflix concurrency-limits](https://github.com/Netflix/concurrency-limits)).
+- `quarkus` is a Go port of the [Quarkus load-shedding extension](https://github.com/quarkusio/quarkus/tree/main/extensions/load-shedding) (itself a simplified Vegas from Netflix concurrency-limits).
+- `concurrencylimits` is a Go port of [Netflix concurrency-limits](https://github.com/Netflix/concurrency-limits) (Vegas/Gradient/Gradient2 + SimpleLimiter + LifoBlockingLimiter).
 - `queue` models a Java `ThreadPoolExecutor` with a bounded queue and `AbortPolicy`.
 - `sentinel` wraps [sentinel-golang](https://github.com/alibaba/sentinel-golang) system adaptive protection.

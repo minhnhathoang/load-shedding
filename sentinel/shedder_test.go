@@ -73,3 +73,13 @@ func TestNoRulesStillAllows(t *testing.T) {
 	_, ok := s.Allow()
 	assert.True(t, ok)
 }
+
+func TestNewWithNoRulesClearsPreviousRules(t *testing.T) {
+	_, err := New(Config{Resource: "test-rules-before-clear", CpuThreshold: 0.8})
+	assert.NoError(t, err)
+	assert.NotEmpty(t, system.GetRules())
+
+	_, err = New(Config{Resource: "test-rules-clear"})
+	assert.NoError(t, err)
+	assert.Empty(t, system.GetRules())
+}

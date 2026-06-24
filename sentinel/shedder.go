@@ -70,10 +70,8 @@ func New(cfg Config) (*Shedder, error) {
 	}
 
 	rules := buildRules(cfg)
-	if len(rules) > 0 {
-		if _, err := system.LoadRules(rules); err != nil {
-			return nil, err
-		}
+	if _, err := system.LoadRules(rules); err != nil {
+		return nil, err
 	}
 
 	resource := cfg.Resource

@@ -140,6 +140,13 @@ func (p *Pool) Submit(task func()) error {
 		return errNilTask
 	}
 
+	return p.submitWithOutcome(func() bool {
+		task()
+		return true
+	})
+}
+
+func (p *Pool) submitWithOutcome(task func() bool) error {
 	// Admission gate (e.g. CPU): reject early before reserving a slot.
 	done, ok := p.gateAllow()
 	if !ok {
@@ -166,7 +173,17 @@ func (p *Pool) Submit(task func()) error {
 		return ErrStopped
 	}
 	// cap(tasks) == cap(sem) and we hold a token ⇒ this send never blocks.
-	p.tasks <- func() { defer done(true); task() }
+	p.tasks <- func() {
+		success := false
+		defer func() {
+			if panicValue := recover(); panicValue != nil {
+				done(false)
+				panic(panicValue)
+			}
+			done(success)
+		}()
+		success = task()
+	}
 	p.accepted.Add(1)
 	return nil
 }
@@ -217,10 +234,17 @@ func (p *Pool) SubmitWait(task func()) error {
 		return errNilTask
 	}
 
-	done := make(chan struct{})
-	if err := p.Submit(func() {
-		defer close(done)
+	return p.submitWaitOutcome(func() bool {
 		task()
+		return true
+	})
+}
+
+func (p *Pool) submitWaitOutcome(task func() bool) error {
+	done := make(chan struct{})
+	if err := p.submitWithOutcome(func() bool {
+		defer close(done)
+		return task()
 	}); err != nil {
 		return err
 	}
@@ -256,12 +280,25 @@ func (p *Pool) Stop() {
 // with 503 Service Unavailable when the request is shed (queue full / stopped).
 func (p *Pool) Handler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		err := p.SubmitWait(func() {
-			next.ServeHTTP(w, r)
+		var panicValue any
+		err := p.submitWaitOutcome(func() (success bool) {
+			cw := &codeWriter{ResponseWriter: w, code: http.StatusOK}
+			defer func() {
+				if p := recover(); p != nil {
+					panicValue = p
+					success = false
+				}
+			}()
+			next.ServeHTTP(cw, r)
+			return cw.code < http.StatusInternalServerError
 		})
 		if err != nil {
 			w.Header().Set("Connection", "close")
 			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		if panicValue != nil {
+			panic(panicValue)
 		}
 	})
 }

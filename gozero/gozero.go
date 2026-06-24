@@ -31,7 +31,11 @@ func (s *Shedder) Handler(next http.Handler) http.Handler {
 
 		cw := &codeWriter{ResponseWriter: w, code: http.StatusOK}
 		defer func() {
-			if cw.code == http.StatusServiceUnavailable {
+			if p := recover(); p != nil {
+				promise.Fail()
+				panic(p)
+			}
+			if cw.code >= http.StatusInternalServerError {
 				promise.Fail()
 			} else {
 				promise.Pass()
@@ -47,6 +51,10 @@ type codeWriter struct {
 	http.ResponseWriter
 	code        int
 	wroteHeader bool
+}
+
+func (w *codeWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
 }
 
 func (w *codeWriter) WriteHeader(code int) {

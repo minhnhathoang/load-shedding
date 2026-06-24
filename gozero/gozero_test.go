@@ -27,6 +27,17 @@ func TestHandlerServes(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
+func TestHandlerPropagatesPanic(t *testing.T) {
+	s := New()
+	h := s.Handler(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic("boom")
+	}))
+
+	assert.Panics(t, func() {
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+	})
+}
+
 func TestCodeWriterCapturesStatus(t *testing.T) {
 	rec := httptest.NewRecorder()
 	cw := &codeWriter{ResponseWriter: rec, code: http.StatusOK}

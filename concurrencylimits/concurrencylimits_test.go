@@ -147,6 +147,22 @@ func TestHandlerServesAndSheds(t *testing.T) {
 	close(block)
 }
 
+func TestHandlerReleasesPermitOnPanic(t *testing.T) {
+	l := NewSimpleLimiter(FixedLimit(1))
+	h := l.Handler(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic("boom")
+	}))
+
+	assert.Panics(t, func() {
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+	})
+	assert.Equal(t, 0, l.Inflight())
+
+	listener, ok := l.Acquire()
+	assert.True(t, ok, "permit should be available after panic")
+	listener.OnIgnore()
+}
+
 // --- LifoBlockingLimiter ---
 
 func TestLifoRejectsWhenBacklogFull(t *testing.T) {

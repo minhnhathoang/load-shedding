@@ -15,12 +15,18 @@ func Handler(limiter Limiter, next http.Handler) http.Handler {
 		}
 
 		cw := &codeWriter{ResponseWriter: w, code: http.StatusOK}
+		defer func() {
+			if p := recover(); p != nil {
+				listener.OnDropped()
+				panic(p)
+			}
+			if cw.code >= 500 {
+				listener.OnDropped()
+			} else {
+				listener.OnSuccess()
+			}
+		}()
 		next.ServeHTTP(cw, r)
-		if cw.code >= 500 {
-			listener.OnDropped()
-		} else {
-			listener.OnSuccess()
-		}
 	})
 }
 
@@ -35,6 +41,10 @@ type codeWriter struct {
 	http.ResponseWriter
 	code        int
 	wroteHeader bool
+}
+
+func (w *codeWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
 }
 
 func (w *codeWriter) WriteHeader(code int) {

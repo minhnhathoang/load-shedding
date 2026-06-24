@@ -1,6 +1,8 @@
 package queue
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -163,4 +165,20 @@ func TestCodelAdaptiveLIFOServesNewestFirst(t *testing.T) {
 	}
 	wg.Wait()
 	assert.Equal(t, int64(30), ran.Load())
+}
+
+func TestCodelHandlerPropagatesPanicAndMarksGateFailure(t *testing.T) {
+	g := &recordingGate{admit: true}
+	p := NewCodel(CodelConfig{Workers: 1, Capacity: 8, Gate: g})
+	defer p.Stop()
+
+	h := p.Handler(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic("boom")
+	}))
+
+	assert.Panics(t, func() {
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+	})
+	assert.Equal(t, int64(1), g.falseN.Load())
+	assert.Equal(t, int64(0), g.trueN.Load())
 }

@@ -127,14 +127,17 @@ func NewCodel(cfg CodelConfig) *CodelPool {
 // Capacity or ErrStopped after Stop. It never blocks. Note: an accepted task may
 // still be dropped later by CoDel; use SubmitWait to observe that.
 func (p *CodelPool) Submit(task func()) error {
-	return p.submit(task, nil)
-}
-
-func (p *CodelPool) submit(task, onDrop func()) error {
 	if task == nil {
 		return errNilTask
 	}
 
+	return p.submitWithOutcome(func() bool {
+		task()
+		return true
+	}, nil)
+}
+
+func (p *CodelPool) submitWithOutcome(task func() bool, onDrop func()) error {
 	// Admission gate (e.g. CPU): reject early before the request enters the queue.
 	done, ok := p.gateAllow()
 	if !ok {
@@ -154,8 +157,18 @@ func (p *CodelPool) submit(task, onDrop func()) error {
 		return ErrQueueFull
 	}
 
-	// Thread the gate outcome: done(true) on run, done(false) on CoDel drop.
-	runTask := func() { defer done(true); task() }
+	// Thread the gate outcome: task result on run, false on panic/drop.
+	runTask := func() {
+		success := false
+		defer func() {
+			if panicValue := recover(); panicValue != nil {
+				done(false)
+				panic(panicValue)
+			}
+			done(success)
+		}()
+		success = task()
+	}
 	dropCb := func() {
 		done(false)
 		if onDrop != nil {
@@ -194,10 +207,20 @@ func (p *CodelPool) SubmitWait(task func()) error {
 		return errNilTask
 	}
 
+	return p.submitWaitOutcome(func() bool {
+		task()
+		return true
+	})
+}
+
+func (p *CodelPool) submitWaitOutcome(task func() bool) error {
 	done := make(chan struct{})
 	var wasDropped atomic.Bool
-	err := p.submit(
-		func() { defer close(done); task() },
+	err := p.submitWithOutcome(
+		func() bool {
+			defer close(done)
+			return task()
+		},
 		func() { wasDropped.Store(true); close(done) },
 	)
 	if err != nil {
@@ -324,9 +347,25 @@ func (p *CodelPool) Stop() {
 // with 503 when the request is shed (rejected at submit or dropped by CoDel).
 func (p *CodelPool) Handler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := p.SubmitWait(func() { next.ServeHTTP(w, r) }); err != nil {
+		var panicValue any
+		err := p.submitWaitOutcome(func() (success bool) {
+			cw := &codeWriter{ResponseWriter: w, code: http.StatusOK}
+			defer func() {
+				if p := recover(); p != nil {
+					panicValue = p
+					success = false
+				}
+			}()
+			next.ServeHTTP(cw, r)
+			return cw.code < http.StatusInternalServerError
+		})
+		if err != nil {
 			w.Header().Set("Connection", "close")
 			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		if panicValue != nil {
+			panic(panicValue)
 		}
 	})
 }

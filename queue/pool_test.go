@@ -215,6 +215,38 @@ func TestHandlerServesAndSheds(t *testing.T) {
 	close(block)
 }
 
+func TestHandlerPropagatesPanicAndMarksGateFailure(t *testing.T) {
+	g := &recordingGate{admit: true}
+	p := New(Config{Workers: 1, QueueCapacity: 1, Gate: g})
+	defer p.Stop()
+
+	h := p.Handler(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic("boom")
+	}))
+
+	assert.Panics(t, func() {
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+	})
+	assert.Equal(t, int64(1), g.falseN.Load())
+	assert.Equal(t, int64(0), g.trueN.Load())
+}
+
+func TestHandlerMarks5xxAsGateFailure(t *testing.T) {
+	g := &recordingGate{admit: true}
+	p := New(Config{Workers: 1, QueueCapacity: 1, Gate: g})
+	defer p.Stop()
+
+	h := p.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Equal(t, int64(1), g.falseN.Load())
+	assert.Equal(t, int64(0), g.trueN.Load())
+}
+
 func TestConcurrentSubmit(t *testing.T) {
 	p := New(Config{Workers: 4, QueueCapacity: 16})
 	defer p.Stop()

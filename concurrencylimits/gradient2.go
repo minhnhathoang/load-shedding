@@ -58,6 +58,27 @@ func Gradient2QueueSize(n int) Gradient2Option {
 	return func(g *Gradient2Limit) { g.queueSizeFunc = func(int) float64 { return float64(n) } }
 }
 
+// Gradient2QueueSizeFunc sets a limit-dependent burst headroom. Pass SqrtQueueSize
+// to use the square-root function (Gradient's behavior). Gradient2 defaults to a
+// constant 4 because it converges fast enough not to need the quick growth, but
+// this remains configurable, matching Netflix's queueSizeFunction builder.
+func Gradient2QueueSizeFunc(fn func(limit int) int) Gradient2Option {
+	return func(g *Gradient2Limit) {
+		g.queueSizeFunc = func(limit int) float64 { return float64(fn(limit)) }
+	}
+}
+
+// SqrtQueueSize returns max(baseline, sqrt(limit)) — the square-root headroom
+// function (Netflix's SquareRootFunction), usable with Gradient2QueueSizeFunc.
+func SqrtQueueSize(baseline int) func(limit int) int {
+	return func(limit int) int {
+		if limit < 0 {
+			limit = 0
+		}
+		return max(baseline, int(math.Sqrt(float64(limit))))
+	}
+}
+
 // NewGradient2Limit returns a Gradient2Limit with Netflix's defaults.
 func NewGradient2Limit(opts ...Gradient2Option) *Gradient2Limit {
 	g := &Gradient2Limit{

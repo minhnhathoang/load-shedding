@@ -1,6 +1,7 @@
 package concurrencylimits
 
 import (
+	"log/slog"
 	"sync/atomic"
 	"time"
 )
@@ -31,20 +32,44 @@ type SimpleLimiter struct {
 	limit    Limit
 	inflight atomic.Int64
 	now      func() time.Time
+	logger   *slog.Logger // nil = no logging
+}
+
+// SimpleOption customizes a SimpleLimiter.
+type SimpleOption func(*SimpleLimiter)
+
+// WithLogger attaches an slog.Logger. When set, the limiter emits a Debug log on
+// every shed (and admit) with the current limit and in-flight count. Default is
+// no logging (zero overhead).
+func WithLogger(logger *slog.Logger) SimpleOption {
+	return func(l *SimpleLimiter) { l.logger = logger }
 }
 
 // NewSimpleLimiter returns a SimpleLimiter driven by the given Limit algorithm.
-func NewSimpleLimiter(limit Limit) *SimpleLimiter {
-	return &SimpleLimiter{limit: limit, now: time.Now}
+func NewSimpleLimiter(limit Limit, opts ...SimpleOption) *SimpleLimiter {
+	l := &SimpleLimiter{limit: limit, now: time.Now}
+	for _, opt := range opts {
+		opt(l)
+	}
+	return l
 }
 
 // Acquire implements Limiter.
 func (l *SimpleLimiter) Acquire() (Listener, bool) {
 	start := l.now()
 	current := int(l.inflight.Add(1))
-	if current > l.limit.Limit() {
+	limit := l.limit.Limit()
+	if current > limit {
 		l.inflight.Add(-1)
+		if l.logger != nil {
+			l.logger.Debug("concurrencylimits: shed",
+				slog.Int("inflight", current), slog.Int("limit", limit))
+		}
 		return nil, false
+	}
+	if l.logger != nil {
+		l.logger.Debug("concurrencylimits: admit",
+			slog.Int("inflight", current), slog.Int("limit", limit))
 	}
 	return &simpleListener{l: l, start: start, inflight: current}, true
 }

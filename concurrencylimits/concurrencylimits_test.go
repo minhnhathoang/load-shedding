@@ -1,6 +1,8 @@
 package concurrencylimits
 
 import (
+	"bytes"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -250,4 +252,27 @@ func TestLifoNoPermitLeakUnderLoad(t *testing.T) {
 	// After everything drains, inflight must be back to zero (no leaked permits).
 	assert.Eventually(t, func() bool { return delegate.Inflight() == 0 }, 2*time.Second, 10*time.Millisecond)
 	assert.Positive(t, done.Load())
+}
+
+func TestSimpleLimiterLogsShed(t *testing.T) {
+	var buf bytes.Buffer
+	lg := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	l := NewSimpleLimiter(FixedLimit(1), WithLogger(lg))
+
+	a, ok := l.Acquire() // admit (logged)
+	assert.True(t, ok)
+	_, ok = l.Acquire() // over limit → shed (logged)
+	assert.False(t, ok)
+	a.OnSuccess()
+
+	out := buf.String()
+	assert.Contains(t, out, "concurrencylimits: shed")
+	assert.Contains(t, out, "limit=1")
+}
+
+func TestSimpleLimiterNoLoggerNoPanic(t *testing.T) {
+	l := NewSimpleLimiter(FixedLimit(1)) // no logger
+	a, ok := l.Acquire()
+	assert.True(t, ok)
+	a.OnSuccess()
 }

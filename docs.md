@@ -206,7 +206,7 @@ https://github.com/Netflix/concurrency-limits
 
 ### How it works
 
-The library ships three limit algorithms — **Vegas**, **Gradient**, **Gradient2** — all of which:
+The library includes three adaptive concurrency algorithms: Vegas, Gradient, and Gradient2. All three dynamically adjust limits based on observed request latency:
 
 - keep `currentLimit` and `inflight`, and reject when `inflight >= currentLimit`;
 - on each completion measure RTT and adjust the limit from a **latency gradient**;

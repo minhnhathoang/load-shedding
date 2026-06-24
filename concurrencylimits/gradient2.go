@@ -48,6 +48,16 @@ func Gradient2LongWindow(n int) Gradient2Option {
 	return func(g *Gradient2Limit) { g.longRtt = newExpAvg(n, 10) }
 }
 
+// Gradient2Smoothing sets the limit-change damping factor (default 0.2).
+func Gradient2Smoothing(s float64) Gradient2Option {
+	return func(g *Gradient2Limit) { g.smoothing = s }
+}
+
+// Gradient2QueueSize sets the constant burst headroom (default 4).
+func Gradient2QueueSize(n int) Gradient2Option {
+	return func(g *Gradient2Limit) { g.queueSizeFunc = func(int) float64 { return float64(n) } }
+}
+
 // NewGradient2Limit returns a Gradient2Limit with Netflix's defaults.
 func NewGradient2Limit(opts ...Gradient2Option) *Gradient2Limit {
 	g := &Gradient2Limit{

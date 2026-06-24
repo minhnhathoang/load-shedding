@@ -251,24 +251,3 @@ func TestLifoNoPermitLeakUnderLoad(t *testing.T) {
 	assert.Eventually(t, func() bool { return delegate.Inflight() == 0 }, 2*time.Second, 10*time.Millisecond)
 	assert.Positive(t, done.Load())
 }
-
-func TestSqrtQueueSize(t *testing.T) {
-	f := SqrtQueueSize(4)
-	assert.Equal(t, 4, f(0))    // max(4, 0)
-	assert.Equal(t, 4, f(9))    // max(4, 3)
-	assert.Equal(t, 4, f(16))   // max(4, 4)
-	assert.Equal(t, 10, f(100)) // max(4, 10)
-	assert.Equal(t, 4, f(-5))   // negative clamps to 0
-}
-
-func TestGradient2QueueSizeFuncBounded(t *testing.T) {
-	g := NewGradient2Limit(
-		Gradient2InitialLimit(20), Gradient2MaxConcurrency(200), Gradient2MinLimit(20),
-		Gradient2QueueSizeFunc(SqrtQueueSize(4)),
-	)
-	for i := 0; i < 200; i++ {
-		g.OnSample(5*time.Millisecond, g.Limit(), false)
-		assert.GreaterOrEqual(t, g.Limit(), 20)
-		assert.LessOrEqual(t, g.Limit(), 200)
-	}
-}

@@ -1,6 +1,7 @@
 package concurrencylimits
 
 import (
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -18,6 +19,7 @@ type LifoBlockingLimiter struct {
 	delegate       Limiter
 	backlogSize    int
 	backlogTimeout time.Duration
+	logger         *slog.Logger // nil = no logging
 
 	mu      sync.Mutex
 	backlog []*waiter // index 0 is the newest waiter (front)
@@ -29,17 +31,31 @@ type waiter struct {
 	removed  bool     // guarded by limiter mu
 }
 
+// LifoOption customizes a LifoBlockingLimiter.
+type LifoOption func(*LifoBlockingLimiter)
+
+// WithLifoLogger attaches an slog.Logger. When set, the limiter emits a Debug
+// log when a request enters the backlog (and when it is shed by a full backlog
+// or a timeout). Default is no logging.
+func WithLifoLogger(logger *slog.Logger) LifoOption {
+	return func(b *LifoBlockingLimiter) { b.logger = logger }
+}
+
 // NewLifoBlockingLimiter wraps delegate with a LIFO backlog. backlogSize <= 0
 // uses the default (100).
-func NewLifoBlockingLimiter(delegate Limiter, backlogSize int, backlogTimeout time.Duration) *LifoBlockingLimiter {
+func NewLifoBlockingLimiter(delegate Limiter, backlogSize int, backlogTimeout time.Duration, opts ...LifoOption) *LifoBlockingLimiter {
 	if backlogSize <= 0 {
 		backlogSize = defaultBacklogSize
 	}
-	return &LifoBlockingLimiter{
+	b := &LifoBlockingLimiter{
 		delegate:       delegate,
 		backlogSize:    backlogSize,
 		backlogTimeout: backlogTimeout,
 	}
+	for _, opt := range opts {
+		opt(b)
+	}
+	return b
 }
 
 // Acquire implements Limiter. It blocks up to BacklogTimeout when the delegate
@@ -61,12 +77,20 @@ func (b *LifoBlockingLimiter) tryAcquire() (Listener, bool) {
 
 	b.mu.Lock()
 	if len(b.backlog) >= b.backlogSize {
+		size := len(b.backlog)
 		b.mu.Unlock()
+		if b.logger != nil {
+			b.logger.Debug("concurrencylimits: shed (LIFO backlog full)", slog.Int("backlog", size))
+		}
 		return nil, false
 	}
 	w := &waiter{ready: make(chan struct{})}
 	b.backlog = append([]*waiter{w}, b.backlog...) // addFirst → LIFO
+	size := len(b.backlog)
 	b.mu.Unlock()
+	if b.logger != nil {
+		b.logger.Debug("concurrencylimits: request added to LIFO backlog", slog.Int("backlog", size))
+	}
 
 	timer := time.NewTimer(b.backlogTimeout)
 	defer timer.Stop()
@@ -88,6 +112,9 @@ func (b *LifoBlockingLimiter) tryAcquire() (Listener, bool) {
 		b.removeWaiter(w)
 		w.removed = true
 		b.mu.Unlock()
+		if b.logger != nil {
+			b.logger.Debug("concurrencylimits: shed (LIFO backlog timeout)")
+		}
 		return nil, false
 	}
 }

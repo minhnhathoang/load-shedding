@@ -276,3 +276,23 @@ func TestSimpleLimiterNoLoggerNoPanic(t *testing.T) {
 	assert.True(t, ok)
 	a.OnSuccess()
 }
+
+func TestLifoLogsBacklogEntry(t *testing.T) {
+	var buf bytes.Buffer
+	lg := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	delegate := NewSimpleLimiter(FixedLimit(1))
+	b := NewLifoBlockingLimiter(delegate, 4, 30*time.Millisecond, WithLifoLogger(lg))
+
+	a, ok := b.Acquire() // takes the only permit (fast path, no log)
+	assert.True(t, ok)
+
+	// next Acquire is over limit → enters backlog (logged), then times out (logged)
+	_, ok = b.Acquire()
+	assert.False(t, ok)
+	a.OnSuccess()
+
+	out := buf.String()
+	assert.Contains(t, out, "request added to LIFO backlog")
+	assert.Contains(t, out, "backlog=1")
+	assert.Contains(t, out, "backlog timeout")
+}

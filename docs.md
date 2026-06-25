@@ -339,6 +339,43 @@ enqueue-timeout + adaptive LIFO) — Netflix just puts the queue *outside* the
 limiter. Note the `quarkus` package ports only the Vegas *limit* (fail-fast) and
 **not** these queue wrappers.
 
+### LifoBlockingLimiter — behavior
+
+`LifoBlockingLimiter` wraps a delegate limiter (a `SimpleLimiter`) with a bounded
+LIFO backlog. Crucially, it **only blocks when the delegate is at its limit** —
+under normal load it is indistinguishable from fail-fast:
+
+```
+Acquire():
+  delegate.Acquire()  ── ok (inflight < limit) ──▶ admit immediately (NO wait)
+       │ rejected (inflight >= limit)
+       ▼
+  backlog full ? ── yes ──▶ shed (reject)
+       │ no
+       ▼
+  push to FRONT of backlog (LIFO), wait up to BacklogTimeout
+       ├─ a slot frees (another request finishes) → admit
+       └─ timeout / still no slot → shed
+```
+
+- **inflight < limit → admit now, zero overhead.** The backlog/wait path is
+  reached *only* when over the limit. So it never slows down normal traffic.
+- **LIFO (newest-first):** under overload, serve the freshest waiter first — old
+  waiters (whose clients may have given up) drain/time out at the tail.
+- **Bounded:** `maxBacklogSize` (default 100) caps waiters; excess is shed
+  immediately. `backlogTimeout` caps how long any waiter blocks.
+
+Trade-off vs `SimpleLimiter`: LIFO **absorbs short bursts** (waits instead of
+shedding) at the cost of added latency for the queued requests; it does **not**
+raise capacity — if the limit is genuinely too low, the backlog just fills and it
+sheds anyway.
+
+```go
+inner := concurrencylimits.NewSimpleLimiter(concurrencylimits.NewGradient2Limit())
+lifo  := concurrencylimits.NewLifoBlockingLimiter(inner, 100, 50*time.Millisecond)
+mux.Handle("/", lifo.Handler(next))
+```
+
 ### Go port (this repo)
 
 The [`concurrencylimits`](./concurrencylimits) package is a faithful Go port of

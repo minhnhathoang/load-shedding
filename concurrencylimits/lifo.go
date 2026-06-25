@@ -34,7 +34,7 @@ type waiter struct {
 // LifoOption customizes a LifoBlockingLimiter.
 type LifoOption func(*LifoBlockingLimiter)
 
-// WithLifoLogger attaches an slog.Logger. When set, the limiter emits a Debug
+// WithLifoLogger attaches an slog.Logger. When set, the limiter emits a Warn
 // log when a request enters the backlog (and when it is shed by a full backlog
 // or a timeout). Default is no logging.
 func WithLifoLogger(logger *slog.Logger) LifoOption {
@@ -80,7 +80,7 @@ func (b *LifoBlockingLimiter) tryAcquire() (Listener, bool) {
 		size := len(b.backlog)
 		b.mu.Unlock()
 		if b.logger != nil {
-			b.logger.Debug("concurrencylimits: shed (LIFO backlog full)", slog.Int("backlog", size))
+			b.logger.Warn("concurrencylimits: shed (LIFO backlog full)", slog.Int("backlog", size))
 		}
 		return nil, false
 	}
@@ -89,7 +89,7 @@ func (b *LifoBlockingLimiter) tryAcquire() (Listener, bool) {
 	size := len(b.backlog)
 	b.mu.Unlock()
 	if b.logger != nil {
-		b.logger.Debug("concurrencylimits: request added to LIFO backlog", slog.Int("backlog", size))
+		b.logger.Warn("concurrencylimits: request added to LIFO backlog", slog.Int("backlog", size))
 	}
 
 	timer := time.NewTimer(b.backlogTimeout)
@@ -113,7 +113,7 @@ func (b *LifoBlockingLimiter) tryAcquire() (Listener, bool) {
 		w.removed = true
 		b.mu.Unlock()
 		if b.logger != nil {
-			b.logger.Debug("concurrencylimits: shed (LIFO backlog timeout)")
+			b.logger.Warn("concurrencylimits: shed (LIFO backlog timeout)")
 		}
 		return nil, false
 	}
